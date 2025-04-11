@@ -194,17 +194,6 @@ class StarkHUDWidget(Widget):
         pixels_per_degree = 2.5
         pitch_offset = self.pitch * pixels_per_degree
         
-        # Draw sky and ground
-        # Sky (light blue)
-        Color(0.2, 0.7, 0.9, 0.3)
-        Rectangle(pos=(x - attitude_size, y - pitch_offset), 
-                  size=(attitude_size * 2, attitude_size * 2))
-        
-        # Ground (brown)
-        Color(0.6, 0.4, 0.2, 0.3)  # Restored brown color for ground
-        Rectangle(pos=(x - attitude_size, y - pitch_offset - attitude_size * 2), 
-                  size=(attitude_size * 2, attitude_size * 2))
-        
         # Horizon line
         Color(1, 1, 1, 0.8)
         Line(points=[x - attitude_size, y - pitch_offset, 
