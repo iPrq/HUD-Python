@@ -1,11 +1,14 @@
 from kivy.app import App
 from kivy.uix.widget import Widget
-from kivy.graphics import Line, Color, Ellipse, Rectangle, Triangle
+from kivy.graphics import Line, Color, Ellipse, Rectangle, Triangle, Callback
 from kivy.clock import Clock
 from kivy.uix.floatlayout import FloatLayout
 from kivy.core.text import Label as CoreLabel
+from kivy.graphics.texture import Texture
 import math
 import random
+import cv2
+import numpy as np
 from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Rotate
 
 class StarkHUDWidget(Widget):
@@ -25,7 +28,44 @@ class StarkHUDWidget(Widget):
         self.data_points = []
         for _ in range(30):  # Generate some random data for visualization
             self.data_points.append(random.uniform(0.2, 0.8))
-        Clock.schedule_interval(self.update, 1/30)  # Restore animation scheduling
+            
+        # Initialize webcam
+        self.frame_width = 640
+        self.frame_height = 480
+        self.capture = None
+        
+        try:
+            self.capture = cv2.VideoCapture(0)
+            
+            # Check if webcam opened successfully
+            if not self.capture.isOpened():
+                self.system_status = "WEBCAM ERROR: CANNOT ACCESS CAMERA"
+                print("Error: Could not open webcam")
+            else:
+                # Get webcam resolution
+                ret, frame = self.capture.read()
+                if ret:
+                    self.frame_height, self.frame_width = frame.shape[:2]
+                    print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
+        except Exception as e:
+            self.system_status = f"WEBCAM ERROR: {str(e)}"
+            print(f"Error initializing webcam: {e}")
+                
+        # Create texture for webcam frame
+        self.texture = Texture.create(size=(self.frame_width, self.frame_height), colorfmt='bgr')
+        # Buffer has to be flipped vertically since OpenCV stores images in a different orientation
+        self.texture.flip_vertical()
+        
+        Clock.schedule_interval(self.update, 1/30)  # Update at 30 FPS
+        
+    def __del__(self):
+        # Release webcam when app closes
+        self.release_camera()
+    
+    def release_camera(self):
+        if hasattr(self, 'capture') and self.capture and self.capture.isOpened():
+            self.capture.release()
+            print("Camera released")
         
     def update(self, dt):
         # Update animation values
@@ -37,6 +77,21 @@ class StarkHUDWidget(Widget):
         self.roll = 0 * math.cos(self.scan_angle * 0.017)
         self.yaw = self.heading  # Link yaw to heading for simplicity
         
+        # Get webcam frame
+        if hasattr(self, 'capture') and self.capture and self.capture.isOpened():
+            try:
+                ret, frame = self.capture.read()
+                
+                if ret:
+                    # Flip horizontally for a mirror effect
+                    frame = cv2.flip(frame, 1)
+                    
+                    # Convert to texture
+                    buf = frame.tobytes()
+                    self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+            except Exception as e:
+                print(f"Error capturing frame: {e}")
+        
         self.canvas.clear()
         self.draw_elements()
         
@@ -45,6 +100,11 @@ class StarkHUDWidget(Widget):
         center_y = self.height / 2
         
         with self.canvas:
+            # Draw camera feed as background
+            if hasattr(self, 'texture'):
+                # Scale texture to match window size
+                Rectangle(texture=self.texture, pos=(0, 0), size=(self.width, self.height))
+                
             # Background elements - hexagonal grid pattern
             Color(0, 0.7, 0.9, 0.1)  # Iron Man blue with low opacity
             self.draw_hex_grid(20, 20, center_x, center_y)
@@ -381,7 +441,7 @@ class StarkHUDWidget(Widget):
         speed_label.refresh()
         texture = speed_label.texture
         Rectangle(pos=(speed_x - texture.width/2, y - texture.height/2), 
-                  size=texture.size, texture=texture)
+                  size=(texture.size), texture=texture)
 
     def draw_power_indicator(self, x, y):
         indicator_height = 300
