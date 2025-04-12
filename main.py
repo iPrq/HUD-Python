@@ -12,9 +12,13 @@ import numpy as np
 from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Rotate
 
 # Try to import picamera2 for Raspberry Pi 5 Module 3 camera
-
-from picamera2 import Picamera2
-PICAMERA_AVAILABLE = True
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+    print("Picamera2 module available")
+except ImportError:
+    PICAMERA_AVAILABLE = False
+    print("Picamera2 module not available")
 
 
 class StarkHUDWidget(Widget):
@@ -42,51 +46,66 @@ class StarkHUDWidget(Widget):
         self.picam = None
         self.using_picamera = False
         
-        # Try to initialize webcam first
+        # On Raspberry Pi, try Pi camera first, otherwise try webcam
+        if PICAMERA_AVAILABLE:
+            if self.try_picamera():
+                print("Using Pi camera as primary camera")
+            else:
+                self.try_webcam()
+        else:
+            self.try_webcam()
+        
+        # Create texture for camera frame with correct dimensions
+        self.texture = Texture.create(size=(self.frame_width, self.frame_height), colorfmt='rgb')
+        
+        Clock.schedule_interval(self.update, 1/30)  # Update at 30 FPS
+    
+    def try_webcam(self):
+        """Try to initialize standard webcam"""
         try:
             self.capture = cv2.VideoCapture(0)
             
             # Check if webcam opened successfully
             if not self.capture.isOpened():
                 self.system_status = "WEBCAM ERROR: CANNOT ACCESS CAMERA"
-                print("Error: Could not open webcam, trying Pi Camera")
-                self.try_picamera()
+                print("Error: Could not open webcam")
+                return False
+            
+            # Get webcam resolution
+            ret, frame = self.capture.read()
+            if ret:
+                self.frame_height, self.frame_width = frame.shape[:2]
+                self.system_status = "STANDARD WEBCAM CONNECTED"
+                print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
+                return True
             else:
-                # Get webcam resolution
-                ret, frame = self.capture.read()
-                if ret:
-                    self.frame_height, self.frame_width = frame.shape[:2]
-                    print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
+                self.system_status = "WEBCAM ERROR: CANNOT GET FRAME"
+                print("Error: Could not get frame from webcam")
+                self.capture.release()
+                self.capture = None
+                return False
         except Exception as e:
             self.system_status = f"WEBCAM ERROR: {str(e)}"
-            print(f"Error initializing webcam: {e}, trying Pi Camera")
-            self.try_picamera()
-                
-        # Create texture for camera frame with correct dimensions
-        self.texture = Texture.create(size=(self.frame_width, self.frame_height), colorfmt='bgr')
-
-        # Only flip if using OpenCV (picamera output is already correctly oriented)
-        if not self.using_picamera:
-            self.texture.flip_vertical()
-        
-        Clock.schedule_interval(self.update, 1/30)  # Update at 30 FPS
+            print(f"Error initializing webcam: {e}")
+            return False
         
     def try_picamera(self):
-        """Try to initialize Raspberry Pi 5 Module 3 camera if webcam fails"""
+        """Initialize Raspberry Pi 5 Module 3 camera"""
         if not PICAMERA_AVAILABLE:
-            self.system_status = "NO CAMERAS AVAILABLE"
+            self.system_status = "PI CAMERA NOT AVAILABLE"
             return False
             
         try:
+            # Initialize the camera with a simpler approach
             self.picam = Picamera2()
             
-            # Create camera configuration
+            # Configure camera with preview config
             config = self.picam.create_preview_configuration(
-                main={"size": (self.frame_width, self.frame_height), "format": "BGR888"}
+                main={"size": (self.frame_width, self.frame_height), "format": "RGB888"}
             )
             self.picam.configure(config)
             
-            # Start the camera with a timeout
+            # Start the camera
             self.picam.start()
             
             # Wait a moment for camera to initialize
@@ -135,59 +154,86 @@ class StarkHUDWidget(Widget):
         self.heading = (self.heading + 0.5) % 360
         
         # Get camera frame
-        if self.using_picamera and hasattr(self, 'picam') and self.picam:
+        frame = self.get_camera_frame()
+        
+        # If we have a frame, update the texture
+        if frame is not None:
+            # Create or update texture
+            if (self.texture.width != frame.shape[1] or 
+                self.texture.height != frame.shape[0]):
+                self.texture = Texture.create(
+                    size=(frame.shape[1], frame.shape[0]), 
+                    colorfmt='rgb'
+                )
+            
+            # Convert frame to buffer and update texture
+            buf = frame.tobytes()
+            self.texture.blit_buffer(buf, colorfmt='rgb', bufferfmt='ubyte')
+        
+        # Redraw the HUD
+        self.canvas.clear()
+        self.draw_elements()
+
+    def get_camera_frame(self):
+        """Get a frame from the active camera (Pi Camera or webcam)"""
+        if self.using_picamera and self.picam:
             try:
-                # Get frame from Pi Camera
+                # Get frame from Pi Camera (already in RGB format from config)
                 frame = self.picam.capture_array()
                 
-                if frame is not None and len(frame.shape) == 3:
-                    # Create texture if dimensions changed
-                    if self.texture.width != frame.shape[1] or self.texture.height != frame.shape[0]:
-                        self.texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+                # Add debug info to Pi Camera frames
+                if frame is not None:
+                    # Define text properties
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    color = (0, 255, 0)  # Green text
                     
-                    # Convert to texture - no flip needed for Pi Camera
-                    buf = frame.tobytes()
-                    self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+                    # Add camera source text
+                    cv2.putText(frame, "Pi Camera Active", (10, 30), 
+                              font, 0.7, color, 2)
                     
-                    # Debug output to confirm frame is being processed
-                    if hasattr(self, '_frame_count'):
-                        self._frame_count += 1
-                        if self._frame_count % 30 == 0:  # Log every ~1 second
-                            print(f"Pi camera frame {self._frame_count}: {frame.shape}")
-                    else:
-                        self._frame_count = 0
-                else:
-                    print(f"Invalid Pi camera frame: {frame}")
+                    # Add resolution info
+                    res_text = f"Resolution: {frame.shape[1]}x{frame.shape[0]}"
+                    cv2.putText(frame, res_text, (10, 60), 
+                              font, 0.6, color, 2)
+                
+                return frame
+                
             except Exception as e:
                 print(f"Error capturing Pi Camera frame: {e}")
-                import traceback
-                traceback.print_exc()
-        elif hasattr(self, 'capture') and self.capture and self.capture.isOpened():
+                return None
+                
+        elif self.capture and self.capture.isOpened():
             try:
                 # Get frame from OpenCV camera
                 ret, frame = self.capture.read()
                 
                 if ret:
-                    # Flip horizontally for a mirror effect
-                    frame = cv2.flip(frame, 1)
+                    # Convert BGR to RGB for Kivy
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
-                    # Convert to texture
-                    buf = frame.tobytes()
-                    self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+                    # Add debug info to webcam frames
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    color = (255, 0, 0)  # Blue text
+                    
+                    cv2.putText(frame, "Webcam Active", (10, 30), 
+                              font, 0.7, color, 2)
+                    
+                    return frame
+                else:
+                    return None
             except Exception as e:
                 print(f"Error capturing webcam frame: {e}")
+                return None
         
-        self.canvas.clear()
-        self.draw_elements()
+        return None
         
     def draw_elements(self):
         center_x = self.width / 2
         center_y = self.height / 2
         
         with self.canvas:
-            # Draw camera feed as background first
+            # Draw camera feed as background first (if available)
             if hasattr(self, 'texture'):
-                # Scale texture to match window size
                 Color(1, 1, 1, 1)  # Full opacity for camera feed
                 Rectangle(texture=self.texture, pos=(0, 0), size=(self.width, self.height))
                 
