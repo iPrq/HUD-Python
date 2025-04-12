@@ -7,9 +7,10 @@ from kivy.core.text import Label as CoreLabel
 from kivy.graphics.texture import Texture
 import math
 import random
-import cv2
+import cv2  
 import numpy as np
 from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Rotate
+from sensors_manager import SensorsManager
 
 # Try to import picamera2 for Raspberry Pi 5 Module 3 camera
 try:
@@ -24,6 +25,12 @@ except ImportError:
 class StarkHUDWidget(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        
+        # Initialize the sensors manager
+        self.sensors = SensorsManager()
+        self.sensors.start()
+        
+        # Set initial values - will be updated from sensors
         self.heading = 0
         self.altitude = 100
         self.speed = 85
@@ -133,7 +140,11 @@ class StarkHUDWidget(Widget):
             return False
     
     def __del__(self):
-        # Release camera resources when app closes
+        # Stop the sensor manager
+        if hasattr(self, 'sensors'):
+            self.sensors.stop()
+        
+        # Release camera resources as before
         self.release_camera()
     
     def release_camera(self):
@@ -149,9 +160,22 @@ class StarkHUDWidget(Widget):
                 pass
         
     def update(self, dt):
-        # Update animation values
+        # Get sensor data
+        sensor_data = self.sensors.get_sensor_data()
+        
+        # Update HUD values from sensors
+        self.heading = sensor_data['heading']
+        self.altitude = sensor_data['altitude']
+        self.pitch = sensor_data['pitch']
+        self.roll = sensor_data['roll'] 
+        self.yaw = sensor_data['yaw']
+        self.speed = sensor_data['speed']
+        
+        # You can calculate power from other values if needed
+        # self.power = ...
+        
+        # Original animation for scan angle
         self.scan_angle = (self.scan_angle + 5) % 360
-        self.heading = (self.heading + 0.5) % 360
         
         # Get camera frame
         frame = self.get_camera_frame()
@@ -669,9 +693,17 @@ class StarkHUDWidget(Widget):
 class StarkHUDApp(App):
     def build(self):
         root = FloatLayout()
-        hud = StarkHUDWidget()
-        root.add_widget(hud)
+        self.hud = StarkHUDWidget()
+        root.add_widget(self.hud)
         return root
+    
+    def on_stop(self):
+        # Clean up resources
+        if hasattr(self, 'hud'):
+            if hasattr(self.hud, 'sensors'):
+                self.hud.sensors.stop()
+            self.hud.release_camera()
+        return True
 
 if __name__ == '__main__':
     StarkHUDApp().run()
