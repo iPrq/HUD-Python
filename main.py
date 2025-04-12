@@ -12,12 +12,10 @@ import numpy as np
 from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Rotate
 
 # Try to import picamera2 for Raspberry Pi 5 Module 3 camera
-try:
-    from picamera2 import Picamera2
-    PICAMERA_AVAILABLE = True
-except ImportError:
-    PICAMERA_AVAILABLE = False
-    print("Picamera2 module not available")
+
+from picamera2 import Picamera2
+PICAMERA_AVAILABLE = True
+
 
 class StarkHUDWidget(Widget):
     def __init__(self, **kwargs):
@@ -64,10 +62,12 @@ class StarkHUDWidget(Widget):
             print(f"Error initializing webcam: {e}, trying Pi Camera")
             self.try_picamera()
                 
-        # Create texture for camera frame
+        # Create texture for camera frame with correct dimensions
         self.texture = Texture.create(size=(self.frame_width, self.frame_height), colorfmt='bgr')
-        # Buffer has to be flipped vertically since OpenCV stores images in a different orientation
-        self.texture.flip_vertical()
+
+        # Only flip if using OpenCV (picamera output is already correctly oriented)
+        if not self.using_picamera:
+            self.texture.flip_vertical()
         
         Clock.schedule_interval(self.update, 1/30)  # Update at 30 FPS
         
@@ -75,26 +75,43 @@ class StarkHUDWidget(Widget):
         """Try to initialize Raspberry Pi 5 Module 3 camera if webcam fails"""
         if not PICAMERA_AVAILABLE:
             self.system_status = "NO CAMERAS AVAILABLE"
-            return
+            return False
             
         try:
             self.picam = Picamera2()
-            self.picam.preview_configuration.main.size = (self.frame_width, self.frame_height)
-            self.picam.preview_configuration.main.format = "BGR888"
-            self.picam.configure("preview")
+            
+            # Create camera configuration
+            config = self.picam.create_preview_configuration(
+                main={"size": (self.frame_width, self.frame_height), "format": "BGR888"}
+            )
+            self.picam.configure(config)
+            
+            # Start the camera with a timeout
             self.picam.start()
+            
+            # Wait a moment for camera to initialize
+            import time
+            time.sleep(1.0)
             
             # Test if we can get a frame
             test_frame = self.picam.capture_array()
-            if test_frame is not None:
+            
+            if test_frame is not None and len(test_frame.shape) == 3:
+                self.frame_height, self.frame_width = test_frame.shape[:2]
                 self.using_picamera = True
-                self.system_status = "RASPBERRY PI CAMERA ACTIVE"
-                print("Successfully initialized Raspberry Pi Camera")
+                self.system_status = f"PI CAMERA ACTIVE: {self.frame_width}x{self.frame_height}"
+                print(f"Successfully initialized Pi Camera: {self.frame_width}x{self.frame_height}")
+                return True
             else:
-                self.system_status = "PI CAMERA ERROR: NO FRAME"
+                self.system_status = "PI CAMERA ERROR: INVALID FRAME"
+                print(f"Invalid frame from Pi Camera: {test_frame}")
+                return False
         except Exception as e:
             self.system_status = f"PI CAMERA ERROR: {str(e)}"
             print(f"Error initializing Pi Camera: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     def __del__(self):
         # Release camera resources when app closes
@@ -117,23 +134,34 @@ class StarkHUDWidget(Widget):
         self.scan_angle = (self.scan_angle + 5) % 360
         self.heading = (self.heading + 0.5) % 360
         
-        # Simulate pitch and roll changes for demonstration
-        self.pitch = 0 * math.sin(self.scan_angle * 0.017)  # Convert to radians
-        self.roll = 0 * math.cos(self.scan_angle * 0.017)
-        self.yaw = self.heading  # Link yaw to heading for simplicity
-        
         # Get camera frame
         if self.using_picamera and hasattr(self, 'picam') and self.picam:
             try:
                 # Get frame from Pi Camera
                 frame = self.picam.capture_array()
                 
-                if frame is not None:
-                    # Convert to texture
+                if frame is not None and len(frame.shape) == 3:
+                    # Create texture if dimensions changed
+                    if self.texture.width != frame.shape[1] or self.texture.height != frame.shape[0]:
+                        self.texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+                    
+                    # Convert to texture - no flip needed for Pi Camera
                     buf = frame.tobytes()
                     self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+                    
+                    # Debug output to confirm frame is being processed
+                    if hasattr(self, '_frame_count'):
+                        self._frame_count += 1
+                        if self._frame_count % 30 == 0:  # Log every ~1 second
+                            print(f"Pi camera frame {self._frame_count}: {frame.shape}")
+                    else:
+                        self._frame_count = 0
+                else:
+                    print(f"Invalid Pi camera frame: {frame}")
             except Exception as e:
                 print(f"Error capturing Pi Camera frame: {e}")
+                import traceback
+                traceback.print_exc()
         elif hasattr(self, 'capture') and self.capture and self.capture.isOpened():
             try:
                 # Get frame from OpenCV camera
@@ -147,7 +175,7 @@ class StarkHUDWidget(Widget):
                     buf = frame.tobytes()
                     self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
             except Exception as e:
-                print(f"Error capturing frame: {e}")
+                print(f"Error capturing webcam frame: {e}")
         
         self.canvas.clear()
         self.draw_elements()
@@ -157,9 +185,10 @@ class StarkHUDWidget(Widget):
         center_y = self.height / 2
         
         with self.canvas:
-            # Draw camera feed as background
+            # Draw camera feed as background first
             if hasattr(self, 'texture'):
                 # Scale texture to match window size
+                Color(1, 1, 1, 1)  # Full opacity for camera feed
                 Rectangle(texture=self.texture, pos=(0, 0), size=(self.width, self.height))
                 
             # Background elements - hexagonal grid pattern
@@ -498,7 +527,7 @@ class StarkHUDWidget(Widget):
         speed_label.refresh()
         texture = speed_label.texture
         Rectangle(pos=(speed_x - texture.width/2, y - texture.height/2), 
-                  size=(texture.size), texture=texture)
+                  size=texture.size, texture=texture)
 
     def draw_power_indicator(self, x, y):
         indicator_height = 300
