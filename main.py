@@ -181,27 +181,13 @@ class StarkHUDWidget(Widget):
                 # Get frame from Pi Camera (already in RGB format from config)
                 frame = self.picam.capture_array()
                 
-                # Add debug info to Pi Camera frames
-                if frame is not None:
-                    # Define text properties
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    color = (0, 255, 0)  # Green text
-                    
-                    # Add camera source text
-                    cv2.putText(frame, "Pi Camera Active", (10, 30), 
-                              font, 0.7, color, 2)
-                    
-                    # Add resolution info
-                    res_text = f"Resolution: {frame.shape[1]}x{frame.shape[0]}"
-                    cv2.putText(frame, res_text, (10, 60), 
-                              font, 0.6, color, 2)
-                
+                # No debug text - removed
                 return frame
-                
+                    
             except Exception as e:
                 print(f"Error capturing Pi Camera frame: {e}")
                 return None
-                
+                    
         elif self.capture and self.capture.isOpened():
             try:
                 # Get frame from OpenCV camera
@@ -211,13 +197,7 @@ class StarkHUDWidget(Widget):
                     # Convert BGR to RGB for Kivy
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
-                    # Add debug info to webcam frames
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    color = (255, 0, 0)  # Blue text
-                    
-                    cv2.putText(frame, "Webcam Active", (10, 30), 
-                              font, 0.7, color, 2)
-                    
+                    # No debug text - removed
                     return frame
                 else:
                     return None
