@@ -11,6 +11,14 @@ import cv2
 import numpy as np
 from kivy.graphics.context_instructions import PushMatrix, PopMatrix, Rotate
 
+# Try to import picamera2 for Raspberry Pi 5 Module 3 camera
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+except ImportError:
+    PICAMERA_AVAILABLE = False
+    print("Picamera2 module not available")
+
 class StarkHUDWidget(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -29,18 +37,22 @@ class StarkHUDWidget(Widget):
         for _ in range(30):  # Generate some random data for visualization
             self.data_points.append(random.uniform(0.2, 0.8))
             
-        # Initialize webcam
+        # Initialize camera variables
         self.frame_width = 640
         self.frame_height = 480
         self.capture = None
+        self.picam = None
+        self.using_picamera = False
         
+        # Try to initialize webcam first
         try:
             self.capture = cv2.VideoCapture(0)
             
             # Check if webcam opened successfully
             if not self.capture.isOpened():
                 self.system_status = "WEBCAM ERROR: CANNOT ACCESS CAMERA"
-                print("Error: Could not open webcam")
+                print("Error: Could not open webcam, trying Pi Camera")
+                self.try_picamera()
             else:
                 # Get webcam resolution
                 ret, frame = self.capture.read()
@@ -49,23 +61,56 @@ class StarkHUDWidget(Widget):
                     print(f"Camera resolution: {self.frame_width}x{self.frame_height}")
         except Exception as e:
             self.system_status = f"WEBCAM ERROR: {str(e)}"
-            print(f"Error initializing webcam: {e}")
+            print(f"Error initializing webcam: {e}, trying Pi Camera")
+            self.try_picamera()
                 
-        # Create texture for webcam frame
+        # Create texture for camera frame
         self.texture = Texture.create(size=(self.frame_width, self.frame_height), colorfmt='bgr')
         # Buffer has to be flipped vertically since OpenCV stores images in a different orientation
         self.texture.flip_vertical()
         
         Clock.schedule_interval(self.update, 1/30)  # Update at 30 FPS
         
+    def try_picamera(self):
+        """Try to initialize Raspberry Pi 5 Module 3 camera if webcam fails"""
+        if not PICAMERA_AVAILABLE:
+            self.system_status = "NO CAMERAS AVAILABLE"
+            return
+            
+        try:
+            self.picam = Picamera2()
+            self.picam.preview_configuration.main.size = (self.frame_width, self.frame_height)
+            self.picam.preview_configuration.main.format = "BGR888"
+            self.picam.configure("preview")
+            self.picam.start()
+            
+            # Test if we can get a frame
+            test_frame = self.picam.capture_array()
+            if test_frame is not None:
+                self.using_picamera = True
+                self.system_status = "RASPBERRY PI CAMERA ACTIVE"
+                print("Successfully initialized Raspberry Pi Camera")
+            else:
+                self.system_status = "PI CAMERA ERROR: NO FRAME"
+        except Exception as e:
+            self.system_status = f"PI CAMERA ERROR: {str(e)}"
+            print(f"Error initializing Pi Camera: {e}")
+    
     def __del__(self):
-        # Release webcam when app closes
+        # Release camera resources when app closes
         self.release_camera()
     
     def release_camera(self):
         if hasattr(self, 'capture') and self.capture and self.capture.isOpened():
             self.capture.release()
-            print("Camera released")
+            print("OpenCV Camera released")
+            
+        if hasattr(self, 'picam') and self.picam and self.using_picamera:
+            try:
+                self.picam.close()
+                print("Pi Camera released")
+            except:
+                pass
         
     def update(self, dt):
         # Update animation values
@@ -77,9 +122,21 @@ class StarkHUDWidget(Widget):
         self.roll = 0 * math.cos(self.scan_angle * 0.017)
         self.yaw = self.heading  # Link yaw to heading for simplicity
         
-        # Get webcam frame
-        if hasattr(self, 'capture') and self.capture and self.capture.isOpened():
+        # Get camera frame
+        if self.using_picamera and hasattr(self, 'picam') and self.picam:
             try:
+                # Get frame from Pi Camera
+                frame = self.picam.capture_array()
+                
+                if frame is not None:
+                    # Convert to texture
+                    buf = frame.tobytes()
+                    self.texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+            except Exception as e:
+                print(f"Error capturing Pi Camera frame: {e}")
+        elif hasattr(self, 'capture') and self.capture and self.capture.isOpened():
+            try:
+                # Get frame from OpenCV camera
                 ret, frame = self.capture.read()
                 
                 if ret:
