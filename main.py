@@ -29,7 +29,7 @@ class StarkHUDWidget(Widget):
         # Initialize the sensors manager
         self.sensors = SensorsManager()
         self.sensors.start()
-        
+        #Testing the sensors manager
         # Set initial values - will be updated from sensors
         self.heading = 0
         self.altitude = 100
